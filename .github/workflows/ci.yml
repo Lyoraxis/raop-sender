@@ -6,11 +6,18 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A push supersedes the run before it. Without this, three quick pushes queue
+# three full Windows machines and bill every one of them.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   windows:
     # The capture path is WASAPI and the crate is cfg(windows); Linux CI would
     # not compile the code that actually matters.
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -19,6 +26,11 @@ jobs:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Cache the compiled dependency graph, not our own crate, so a source
+          # change still rebuilds raop-sender itself.
+          cache-targets: true
+          cache-on-failure: true
 
       - name: Formatting
         run: cargo fmt --check
