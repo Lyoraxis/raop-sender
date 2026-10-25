@@ -1,0 +1,68 @@
+name: release
+
+# A tag builds the artifact it names. Hand-built zips drift away from the tag they
+# are attached to — that is exactly how v0.1.0 shipped without the fix that makes
+# quiet audio start — so the asset is produced here or not at all.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Cache dependencies, not this crate, so a stale artifact can never be reused.
+          cache-targets: false
+
+      - name: Check tag matches Cargo.toml
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}".TrimStart("v")
+          $cargo = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          if ($tag -ne $cargo) {
+            Write-Error "tag $tag does not match Cargo.toml version $cargo"
+            exit 1
+          }
+          Write-Host "tag and crate version agree on $cargo"
+
+      - run: cargo fmt --check
+      - run: cargo clippy --release --all-targets -- -D warnings
+      - run: cargo test --release
+      - run: cargo build --release
+
+      - name: Stage the artifact
+        shell: pwsh
+        run: |
+          $name = "raop-sender-${{ github.event.inputs.tag || github.ref_name }}-win64"
+          New-Item -ItemType Directory -Path $name | Out-Null
+          Copy-Item target/release/raop-daemon.exe, target/release/raop-sender.exe, target/release/raop-gui.exe $name
+          Copy-Item install.ps1, README.md, LICENSE, CHANGELOG.md $name
+          Compress-Archive -Path "$name/*" -DestinationPath "$name.zip"
+          Get-ChildItem $name | Select-Object Name, Length | Format-Table -AutoSize
+          (Get-FileHash "$name.zip" -Algorithm SHA256).Hash
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: raop-sender-*-win64.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true

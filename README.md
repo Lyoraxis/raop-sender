@@ -310,6 +310,7 @@ calling the sender broken.
 | `src/rtsp.rs` | dependency-free RTSP client |
 | `DESIGN.md` | wire-level notes and the failure modes found while building it |
 | `CHANGELOG.md` | what changed, and why each change mattered |
+| `.github/workflows/release.yml` | a tag builds and attaches its own artifact |
 
 ## Notes on the RSA key
 
