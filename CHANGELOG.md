@@ -3,11 +3,15 @@
 All notable changes to this project. Dates are ISO-8601. This project follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.1] — 2026-10-25
 
-Landed immediately after `v0.2.0` was tagged, so it is not in that release's
-changelog even though its binaries contain it:
+Landed immediately after `v0.2.0` was tagged, so `v0.2.0`'s binaries contain most of
+this while its changelog does not. Use this release.
 
+- **The GUI no longer hardcodes a device name.** Its title bar and heading said
+  `Devialet AirPlay`, which contradicted the README's "nothing site-specific is
+  compiled in" — the receiver is configuration, not a constant. Both now read
+  `raop-sender`.
 - **Loopback harness.** `tools/mock-receiver.py` plus `examples/tonefeed.rs` and
   `tools/loopback-test.ps1` exercise the streaming path with no receiver and no
   sound, and assert what is invisible by ear: sequence continuity, the 352-frame
@@ -68,5 +72,6 @@ the RAOP framing, sync and timing packets, WASAPI capture of a virtual cable, a
 windowless daemon and an installer that registers a logon task and the inbound UDP
 rule the receiver needs in order to send timing requests back.
 
+[0.2.1]: https://github.com/Lyoraxis/raop-sender/releases/tag/v0.2.1
 [0.2.0]: https://github.com/Lyoraxis/raop-sender/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Lyoraxis/raop-sender/releases/tag/v0.1.0

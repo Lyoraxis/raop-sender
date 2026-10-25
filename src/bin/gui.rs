@@ -27,6 +27,10 @@ fn default_host() -> String {
     std::env::var("RAOP_HOST").unwrap_or_default()
 }
 
+/// Shown in the title bar and the heading. A device name does not belong here: the
+/// receiver is configuration, and the crate compiles nothing site-specific in.
+const WINDOW_TITLE: &str = "raop-sender";
+
 /// Fixed signal level. Loudness is the receiver volume slider, not this.
 const TONE_AMPLITUDE: f64 = 0.25;
 
@@ -37,11 +41,7 @@ fn main() -> eframe::Result<()> {
             .with_min_inner_size([440.0, 360.0]),
         ..Default::default()
     };
-    eframe::run_native(
-        "Devialet AirPlay",
-        options,
-        Box::new(|_cc| Box::new(App::new())),
-    )
+    eframe::run_native(WINDOW_TITLE, options, Box::new(|_cc| Box::new(App::new())))
 }
 
 struct App {
@@ -155,7 +155,7 @@ impl eframe::App for App {
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Devialet AirPlay");
+            ui.heading(WINDOW_TITLE);
             ui.add_enabled(
                 !self.playing,
                 egui::TextEdit::singleline(&mut self.host)
