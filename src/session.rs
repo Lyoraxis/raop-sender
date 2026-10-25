@@ -464,6 +464,7 @@ fn stream_system(
         let idle_limit = Duration::from_millis(idle_rotate_ms() as u64);
         let mut last_sound = std::time::Instant::now();
         let mut interval_peak: u16 = 0;
+        let mut chunk = vec![0u8; FRAMES_PER_PACKET as usize * 4];
 
         while started && !stop.load(Ordering::Relaxed) && alive.load(Ordering::Relaxed) {
             if last_sound.elapsed() > idle_limit {
@@ -474,34 +475,40 @@ fn stream_system(
                 break;
             }
 
-            let mut chunk = vec![0u8; FRAMES_PER_PACKET as usize * 4];
-            let mut got = 0usize;
-            if let Ok(mut q) = queue.lock() {
-                while got < chunk.len() {
-                    match q.pop_front() {
-                        Some(b) => {
-                            chunk[got] = b;
-                            got += 1;
-                        }
-                        None => break,
-                    }
+            chunk.fill(0);
+            let mut got = drain_into(&queue, &mut chunk);
+
+            if got < chunk.len() {
+                // Pacing runs at exactly real time, so ordinary scheduling jitter
+                // can leave the queue a millisecond or two short of a packet.
+                // Waiting for those frames is inaudible; padding the packet with
+                // zeros is an 8 ms gap in the stream, which is not.
+                let deadline = std::time::Instant::now() + PACKET_WAIT;
+                while got < chunk.len()
+                    && std::time::Instant::now() < deadline
+                    && !stop.load(Ordering::Relaxed)
+                    && alive.load(Ordering::Relaxed)
+                {
+                    std::thread::sleep(Duration::from_millis(1));
+                    got += drain_into_from(&queue, &mut chunk, got);
                 }
             }
+
             if got < chunk.len() {
                 starved += 1;
                 for b in chunk[got..].iter_mut() {
                     *b = 0;
                 }
-            } else {
-                let peak = chunk
-                    .chunks_exact(2)
-                    .map(|c| i16::from_le_bytes([c[0], c[1]]).unsigned_abs())
-                    .max()
-                    .unwrap_or(0);
-                interval_peak = interval_peak.max(peak);
-                if peak > AUDIO_GATE {
-                    last_sound = std::time::Instant::now();
-                }
+            }
+
+            let peak = chunk
+                .chunks_exact(2)
+                .map(|c| i16::from_le_bytes([c[0], c[1]]).unsigned_abs())
+                .max()
+                .unwrap_or(0);
+            interval_peak = interval_peak.max(peak);
+            if peak > AUDIO_GATE {
+                last_sound = std::time::Instant::now();
             }
 
             let packet = audio_packet_bytes(&mut alac, seq, timestamp, ssrc, &chunk, key, iv);
@@ -534,6 +541,42 @@ fn stream_system(
         ));
         Ok(())
     }
+}
+
+/// How long a packet may wait for its missing frames before it is padded with
+/// zeros. Bounded so a genuinely silent endpoint cannot stall the pacer.
+#[cfg(windows)]
+const PACKET_WAIT: Duration = Duration::from_millis(30);
+
+/// Move bytes from the capture queue into `chunk`, starting at `offset`.
+/// Returns how many bytes were added.
+#[cfg(windows)]
+fn drain_into_from(
+    queue: &Arc<std::sync::Mutex<std::collections::VecDeque<u8>>>,
+    chunk: &mut [u8],
+    offset: usize,
+) -> usize {
+    let mut got = offset;
+    if let Ok(mut q) = queue.lock() {
+        while got < chunk.len() {
+            match q.pop_front() {
+                Some(b) => {
+                    chunk[got] = b;
+                    got += 1;
+                }
+                None => break,
+            }
+        }
+    }
+    got - offset
+}
+
+#[cfg(windows)]
+fn drain_into(
+    queue: &Arc<std::sync::Mutex<std::collections::VecDeque<u8>>>,
+    chunk: &mut [u8],
+) -> usize {
+    drain_into_from(queue, chunk, 0)
 }
 
 fn play_inner(

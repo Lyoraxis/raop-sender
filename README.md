@@ -267,6 +267,20 @@ by ear:
 The streaming path itself is Windows-only and has no automated test — it needs a
 real endpoint and a real receiver. `--doctor` covers its preconditions.
 
+## Deployment hazards
+
+These are not bugs to fix; they are properties of the stack. Know them before
+calling the sender broken.
+
+| Hazard | What happens | What to do |
+|---|---|---|
+| **The capture endpoint is exclusive** | VB-CABLE feeds its first capture client. A second one — another sender, OBS, Sonar's router — reads noise, so the daemon goes deaf **silently**. | Run one reader only. If audio stops without a firewall or routing change, check what else opened `CABLE Output`. |
+| **`raop-gui.exe` competes with the daemon** | Same endpoint. Start it *instead of* the daemon, never alongside, and stop whichever one you are not using. | Use the GUI to test a receiver, the daemon to actually listen. |
+| **The receiver's volume is shared with its TV** | `SET_PARAMETER volume` writes the master level of the device, which also controls its HDMI output. | The daemon never writes it. Set volume on the receiver or its remote. |
+| **Standby reads `-144.000000` and ignores writes** | The device reports a sentinel volume and silently drops `SET_PARAMETER` with `200 OK`. | Wake it (TV on, or its remote) before streaming. No sender-side fix exists. |
+| **Below roughly -28 dB the receiver mutes** | It does not fade, it cuts out. | Keep the receiver's volume above that. |
+| **Sonar and similar mixers sit in the path** | Apps are routed by the mixer, so "music is playing" can mean "playing to a different device". | Check the mixer's output device, not just the Windows default. |
+
 ## Limitations
 
 - **Windows only.** Capture is WASAPI; the crate is `cfg(windows)`.
@@ -287,12 +301,14 @@ real endpoint and a real receiver. `--doctor` covers its preconditions.
 | File | Contents |
 |---|---|
 | `src/session.rs` | RAOP handshake, RTP pacing, sync packets, timing server |
+| `src/doctor.rs` | `--doctor` checks, one per silent failure mode |
 | `src/crypto.rs` | RSA-OAEP key wrap, AES-128-CBC payload encryption |
 | `src/alac.rs` | ALAC encoding wrapper (352 frames/packet) |
 | `src/capture.rs` | WASAPI capture from the chosen endpoint (Windows-only) |
 | `src/pcm.rs` | endpoint bytes → 44.1 kHz/16-bit/stereo; platform-neutral and tested |
 | `src/rtsp.rs` | dependency-free RTSP client |
 | `DESIGN.md` | wire-level notes and the failure modes found while building it |
+| `CHANGELOG.md` | what changed, and why each change mattered |
 
 ## Notes on the RSA key
 

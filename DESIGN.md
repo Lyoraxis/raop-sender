@@ -213,6 +213,11 @@ that no longer exists — the "pressed play, nothing happened" symptom. Sending
 After the stream starts, silence does **not** idle the session: a silent packet every
 8 ms keeps the RTP timeline alive, so pausing playback and resuming costs nothing.
 
+Once streaming, a packet that is short by a frame or two waits up to 30 ms
+(`PACKET_WAIT`) for the rest instead of being zero-filled. Pacing is exactly real
+time, so jitter alone produces short packets, and padding one is an 8 ms gap that
+the receiver renders as a click.
+
 `RAOP_IDLE_MS` (default 10 minutes) exists only to re-arm a receiver that fell
 asleep mid-session. It was 2 minutes and that was wrong — it tore down sessions
 that were perfectly healthy, so every long pause was followed by a reconnect the
