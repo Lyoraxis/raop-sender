@@ -11,6 +11,7 @@
 
 use crate::config;
 use crate::rtsp::RtspClient;
+use crate::session::AUDIO_GATE;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
@@ -107,10 +108,6 @@ impl Report {
     }
 }
 
-/// Peak the session needs before it starts streaming; keep in sync with
-/// `session::stream_system`.
-const AUDIO_GATE: u16 = 200;
-
 pub fn run(host: Option<&str>, capture_seconds: f64) -> Report {
     let mut checks = Vec::new();
 
@@ -124,7 +121,7 @@ pub fn run(host: Option<&str>, capture_seconds: f64) -> Report {
         checks.push(Check::unknown("receiver /info", "skipped, no address"));
     }
 
-    checks.extend(capture_checks(capture_seconds));
+    checks.extend(capture_checks(capture_seconds, daemon_running()));
     checks.push(firewall());
     checks.push(task());
 
@@ -217,7 +214,7 @@ fn receiver_info(host: &str) -> Check {
 }
 
 #[cfg(windows)]
-fn capture_checks(seconds: f64) -> Vec<Check> {
+fn capture_checks(seconds: f64, daemon: bool) -> Vec<Check> {
     let filter = Some(config::device_filter());
     match crate::capture::probe_level(filter, Duration::from_secs_f64(seconds.clamp(0.2, 5.0))) {
         Ok(probe) => {
@@ -232,6 +229,20 @@ fn capture_checks(seconds: f64) -> Vec<Check> {
             } else {
                 format!("{:.1}", 20.0 * (probe.peak as f64 / 32_768.0).log10())
             };
+            if daemon {
+                // VB-CABLE feeds the first capture client and starves the next, so a
+                // second reader measures noise. Say so instead of reporting a false
+                // "nothing is routed" while music is playing.
+                out.push(Check::unknown(
+                    "audio level",
+                    format!(
+                        "peak {} ({dbfs} dBFS) measured, but the daemon holds the endpoint; \
+                         read the peak field in daemon.log, or stop the daemon to measure here",
+                        probe.peak
+                    ),
+                ));
+                return out;
+            }
             if probe.peak == 0 {
                 out.push(Check::fail(
                     "audio level",
@@ -271,7 +282,7 @@ fn capture_checks(seconds: f64) -> Vec<Check> {
 }
 
 #[cfg(not(windows))]
-fn capture_checks(_seconds: f64) -> Vec<Check> {
+fn capture_checks(_seconds: f64, _daemon: bool) -> Vec<Check> {
     vec![
         Check::unknown("capture device", "system capture is Windows-only"),
         Check::unknown("audio level", "system capture is Windows-only"),
@@ -281,6 +292,20 @@ fn capture_checks(_seconds: f64) -> Vec<Check> {
 /// The receiver sends timing requests back to the sender, so the daemon needs an
 /// inbound UDP rule scoped to its own executable. Without it every request still
 /// returns 200 and nothing plays.
+/// A running daemon owns the endpoint, so a second capture client sees silence.
+#[cfg(windows)]
+fn daemon_running() -> bool {
+    let out = powershell(
+        "(Get-Process -Name 'raop-daemon' -ErrorAction SilentlyContinue | Measure-Object).Count",
+    );
+    matches!(out, Ok(ref n) if n.trim().parse::<usize>().unwrap_or(0) > 0)
+}
+
+#[cfg(not(windows))]
+fn daemon_running() -> bool {
+    false
+}
+
 #[cfg(windows)]
 fn firewall() -> Check {
     let rule = config::task_name();

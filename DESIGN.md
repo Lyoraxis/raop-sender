@@ -193,6 +193,11 @@ Sender-side delay is entirely ours and is logged:
 | Receiver's advertised latency | ~50 ms | not controllable here |
 | LAN transit | < 5 ms | — |
 
+The gate threshold is `session::AUDIO_GATE` = 16 on a 16-bit scale, about -66 dBFS.
+It only has to separate real digital zeros from signal; anything near the source
+level would drop quiet playback entirely. The daemon logs the peak it is sending
+with every stats line, so "silence or music?" is answerable from the log.
+
 The silence gate also prevents a stale backlog: while waiting for non-silent
 audio the queue would otherwise grow, and playing it from the front made playback
 seconds late. The gate discards everything but the last `RAOP_BUFFER_MS`.

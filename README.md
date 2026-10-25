@@ -53,7 +53,10 @@ them up"):
    receiver's master volume, shared with its TV/HDMI output, so writing it turns
    the television up or down. `Settings::set_volume = false` in the daemon.
 7. Stream nothing until captured audio is non-silent. An RTP stream of digital
-   zeros makes receivers click.
+   zeros makes receivers click. The gate is `session::AUDIO_GATE`, deliberately
+   low (16 of 32768): a quiet source or a low Windows volume leaves peaks in the
+   low hundreds, and a gate set near the source level silently turns "a bit quiet"
+   into "no sound at all".
 8. Read the endpoint's real mix format and convert it in `src/pcm.rs`. Assuming
    16-bit PCM when the device emits 32-bit float yields loud static. That module is
    platform-neutral and unit-tested for exactly this reason — keep it that way.
@@ -230,15 +233,18 @@ cable locally and opens no session:
   [ok  ] receiver tcp   192.0.2.10:5000 accepts connections
   [ok  ] receiver /info 200 OK (AppleTV3,2)
   [ok  ] capture device CABLE Output (VB-Audio Virtual Cable) at 44100 Hz, 32-bit, 2 ch, float=true, 44541 frames heard
-  [FAIL] audio level    peak 0 (-inf dBFS): nothing is being routed here
-                         ->  set the Windows output device to CABLE Input, then play something
+  [ok  ] audio level    peak 114 (-49.2 dBFS), above the 16 start gate
   [ok  ] firewall       rule 'AirPlay Sender' is present
   [ok  ] scheduled task 'AirPlay Sender' is registered
 ```
 
 Exit code is non-zero when any check fails. The audio-level check is the one that
 distinguishes "the sender is broken" from "nothing is being sent to it": it reports
-the peak it can hear and compares it with the gate the session waits for.
+the peak it can hear and compares it with the gate the session waits for. It is
+skipped when the daemon is running, because VB-CABLE feeds only its first capture
+client — a second reader measures noise, and a false "nothing is routed" is worse
+than no answer. In that case read the `peak` field the daemon logs with every stats
+line.
 
 ## Tests
 

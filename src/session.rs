@@ -19,6 +19,14 @@ const TIMEOUT: Duration = Duration::from_secs(15);
 /// into a gap — which is what makes a clean tone sound buzzy.
 const LEAD_SECS: f64 = 0.0;
 
+/// Peak a captured frame must reach before a stream starts, on a 16-bit scale.
+///
+/// The gate exists to avoid streaming exact digital zeros, which makes receivers
+/// click. It must therefore be far below any real listening level: a quiet source
+/// or a low Windows volume leaves peaks in the low hundreds, and a gate set near
+/// the source level turns "slightly quiet" into "no sound at all".
+pub const AUDIO_GATE: u16 = 16;
+
 static RTP_NOW: AtomicU32 = AtomicU32::new(0);
 static TIMING_REQUESTS: AtomicU32 = AtomicU32::new(0);
 
@@ -414,7 +422,7 @@ fn stream_system(
                 .map(|c| i16::from_le_bytes([c[0], c[1]]).unsigned_abs())
                 .max()
                 .unwrap_or(0);
-            if peak > 200 {
+            if peak > AUDIO_GATE {
                 started = true;
                 start = std::time::Instant::now();
                 // Drop everything older than the last quarter second: the queue
@@ -455,6 +463,7 @@ fn stream_system(
 
         let idle_limit = Duration::from_millis(idle_rotate_ms() as u64);
         let mut last_sound = std::time::Instant::now();
+        let mut interval_peak: u16 = 0;
 
         while started && !stop.load(Ordering::Relaxed) && alive.load(Ordering::Relaxed) {
             if last_sound.elapsed() > idle_limit {
@@ -489,7 +498,8 @@ fn stream_system(
                     .map(|c| i16::from_le_bytes([c[0], c[1]]).unsigned_abs())
                     .max()
                     .unwrap_or(0);
-                if peak > 200 {
+                interval_peak = interval_peak.max(peak);
+                if peak > AUDIO_GATE {
                     last_sound = std::time::Instant::now();
                 }
             }
@@ -506,10 +516,14 @@ fn stream_system(
                 // has not been transmitted yet, so it is pure added latency.
                 let queued = queue.lock().map(|q| q.len()).unwrap_or(0);
                 let queued_ms = queued * 1000 / crate::pcm::BYTES_PER_SECOND;
+                // The peak is the level actually being sent. It answers "is this
+                // silence or music?" from the log alone, which is otherwise
+                // impossible to tell from the receiver's replies.
                 log(format!(
-                    "  {} packets, {} underruns, pipeline delay {} ms",
-                    seq as u32, starved, queued_ms
+                    "  {} packets, {} underruns, pipeline delay {} ms, peak {}",
+                    seq as u32, starved, queued_ms, interval_peak
                 ));
+                interval_peak = 0;
             }
             pace(start, sent);
         }
