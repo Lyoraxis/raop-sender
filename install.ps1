@@ -69,6 +69,9 @@ Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
 Write-Host "task     : '$TaskName' registered at logon"
 
 Write-Host ""
+Write-Host "warning  : the folder must stay where it is. The firewall rule and the task" -ForegroundColor Yellow
+Write-Host "           point at $exe; moving it breaks the stream silently." -ForegroundColor Yellow
+Write-Host ""
 Write-Host "Start it now with:  Start-ScheduledTask -TaskName '$TaskName'"
 Write-Host "Logs go to:         $(Join-Path $PSScriptRoot 'daemon.log')"
 Write-Host "Remove it with:     Unregister-ScheduledTask -TaskName '$TaskName' -Confirm:`$false"

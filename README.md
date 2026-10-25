@@ -320,6 +320,8 @@ calling the sender broken.
 | **Standby reads `-144.000000` and ignores writes** | The device reports a sentinel volume and silently drops `SET_PARAMETER` with `200 OK`. | Wake it (TV on, or its remote) before streaming. No sender-side fix exists. |
 | **Below roughly -28 dB the receiver mutes** | It does not fade, it cuts out. | Keep the receiver's volume above that. |
 | **Sonar and similar mixers sit in the path** | Apps are routed by the mixer, so "music is playing" can mean "playing to a different device". | Check the mixer's output device, not just the Windows default. |
+| **The folder must not move after installing** | The firewall rule and the scheduled task both point at the daemon's absolute path, so moving or renaming the folder silently breaks the stream — every request still returns `200 OK`. | Unzip somewhere permanent first. If you move it, run `install.ps1` again from the new location. |
+| **The binaries are unsigned** | SmartScreen and Defender may warn about an unknown publisher, and `install.ps1` asks for elevation. | The release is built by GitHub Actions from the tagged commit, so the source of every artifact is auditable; compare its SHA-256 with the one in the release notes. |
 
 ## Limitations
 
