@@ -9,6 +9,12 @@ fn main() {
 
     #[cfg(windows)]
     {
+        let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".to_string());
+        // The manifest identity is not shown in Explorer, but a stale version there
+        // is a trap: it silently disagrees with the resource, and nobody notices
+        // until they are comparing two builds.
+        let identity = format!("{version}.0");
+
         let mut res = winresource::WindowsResource::new();
         res.set("ProductName", "raop-sender");
         res.set("FileDescription", "AirPlay 1 / RAOP sender for Windows");
@@ -16,10 +22,10 @@ fn main() {
         res.set("LegalCopyright", "MIT");
         res.set("OriginalFilename", "raop-daemon.exe");
         res.set("InternalName", "raop-sender");
-        res.set_manifest(
+        res.set_manifest(&format!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity type="win32" name="raop-sender" version="0.1.0.0"/>
+  <assemblyIdentity type="win32" name="raop-sender" version="{identity}"/>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>
@@ -27,8 +33,8 @@ fn main() {
       </requestedPrivileges>
     </security>
   </trustInfo>
-</assembly>"#,
-        );
+</assembly>"#
+        ));
         res.compile().expect("windows resource");
     }
 }
