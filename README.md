@@ -354,6 +354,19 @@ calling the sender broken.
 | `examples/tonefeed.rs` | renders a sine into the cable, for the harness |
 | `.github/workflows/release.yml` | a tag builds and attaches its own artifact |
 
+## Contributing
+
+The CI job is the gate: `cargo fmt --check`, `cargo clippy --release --all-targets --
+-D warnings`, `cargo test --release`, then a release build, on `windows-latest`.
+Reproduce it locally with the same four commands from the Build section.
+
+Before sending a change to protocol code, run `tools/loopback-test.ps1`. It is the
+only check that exercises pacing, framing and the capture queue, and it needs no
+receiver — but stop the daemon first, for the reasons in its header.
+
+Nothing in this repository requires a particular commit identity, and no
+site-specific value belongs in the source: the receiver is configuration.
+
 ## Notes on the RSA key
 
 `src/crypto.rs` embeds the 2048-bit RAOP public key that AirPlay 1 receivers
