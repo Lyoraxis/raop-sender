@@ -5,13 +5,13 @@
 
 use raop_sender::config;
 use raop_sender::doctor;
-use raop_sender::session::{self, Settings};
+use raop_sender::session::{self, Settings, Source};
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 const USAGE: &str = "\
-  raop-sender --play [--seconds N] [--volume-db X] [--host IP:PORT]
+  raop-sender --play [--seconds N] [--volume-db X] [--host IP:PORT] [--system]
   raop-sender --doctor [--host IP:PORT]   check every precondition, plays nothing
   raop-sender --probe-volume              handshake + volume only, silent";
 
@@ -19,6 +19,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
 
     let doctor_mode = args.iter().any(|a| a == "--doctor");
+    let system = args.iter().any(|a| a == "--system");
     let probe = args.iter().any(|a| a == "--probe-volume");
     let play = args.iter().any(|a| a == "--play");
 
@@ -65,6 +66,13 @@ fn main() -> ExitCode {
         probe_only: probe,
         ..Settings::default()
     };
+    if system {
+        // Capture the cable instead of generating a tone: this is what the daemon
+        // does, exposed so the same path can be tested from a terminal.
+        cfg.source = Source::System;
+        cfg.device_filter = Some(config::device_filter());
+        cfg.set_volume = false;
+    }
     if let Some(v) = get("--seconds").and_then(|v| v.parse().ok()) {
         cfg.seconds = v;
     }

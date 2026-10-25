@@ -265,8 +265,38 @@ by ear:
   second and across 100 chunks, chunk-boundary independence, and nonsense geometry.
   This module is platform-neutral so it can be tested off Windows.
 
-The streaming path itself is Windows-only and has no automated test — it needs a
-real endpoint and a real receiver. `--doctor` covers its preconditions.
+The streaming path itself is Windows-only and the unit tests cannot reach it, so
+there is a loopback harness instead. It needs no AirPlay hardware and makes no
+sound: the sender captures `CABLE Output`, `tonefeed` renders a sine into
+`CABLE Input`, and a mock receiver on `127.0.0.1` answers the handshake and checks
+what arrives.
+
+```powershell
+pwsh tools/loopback-test.ps1 -Seconds 30
+```
+
+That runs all three parts and prints the verdict. To drive them by hand:
+
+```bash
+python tools/mock-receiver.py --port 5000 --seconds 30     # terminal 1
+cargo run --release --example tonefeed -- --seconds 20     # terminal 2
+cargo run --release --bin raop-sender -- --play --system --host 127.0.0.1:5000
+```
+
+The mock asserts the things that are invisible by ear: the sequence number
+advances by exactly one (no loss after send), the timestamp advances by exactly
+352 frames (framing), the rate is ~125 packets/s (pacing), and every payload is
+non-empty and smaller than the raw PCM it encodes (ALAC actually compressing). It
+also reports how many sync packets and timing requests it saw.
+
+**Stop the daemon before running it.** The daemon captures the same endpoint, and
+VB-CABLE feeds only its first capture client, so both would starve. Worse, if the
+daemon is up it forwards the test tone to the real receiver — the script refuses to
+run in that case.
+
+**Flush the cable afterwards.** VB-CABLE hands its last buffer to a fresh capture
+client, so the next daemon start plays a burst of whatever was rendered last. The
+script ends by rendering two seconds of silence for exactly this reason.
 
 ## Deployment hazards
 
@@ -310,6 +340,9 @@ calling the sender broken.
 | `src/rtsp.rs` | dependency-free RTSP client |
 | `DESIGN.md` | wire-level notes and the failure modes found while building it |
 | `CHANGELOG.md` | what changed, and why each change mattered |
+| `tools/mock-receiver.py` | loopback RAOP receiver that verifies the wire format |
+| `tools/loopback-test.ps1` | runs the harness, with the daemon-running and stale-buffer guards |
+| `examples/tonefeed.rs` | renders a sine into the cable, for the harness |
 | `.github/workflows/release.yml` | a tag builds and attaches its own artifact |
 
 ## Notes on the RSA key

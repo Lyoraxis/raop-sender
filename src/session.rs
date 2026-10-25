@@ -476,23 +476,9 @@ fn stream_system(
             }
 
             chunk.fill(0);
-            let mut got = drain_into(&queue, &mut chunk);
-
-            if got < chunk.len() {
-                // Pacing runs at exactly real time, so ordinary scheduling jitter
-                // can leave the queue a millisecond or two short of a packet.
-                // Waiting for those frames is inaudible; padding the packet with
-                // zeros is an 8 ms gap in the stream, which is not.
-                let deadline = std::time::Instant::now() + PACKET_WAIT;
-                while got < chunk.len()
-                    && std::time::Instant::now() < deadline
-                    && !stop.load(Ordering::Relaxed)
-                    && alive.load(Ordering::Relaxed)
-                {
-                    std::thread::sleep(Duration::from_millis(1));
-                    got += drain_into_from(&queue, &mut chunk, got);
-                }
-            }
+            let got = fill_with_wait(&mut chunk, PACKET_WAIT, |buf, offset| {
+                drain_into_from(&queue, buf, offset)
+            });
 
             if got < chunk.len() {
                 starved += 1;
@@ -545,8 +531,29 @@ fn stream_system(
 
 /// How long a packet may wait for its missing frames before it is padded with
 /// zeros. Bounded so a genuinely silent endpoint cannot stall the pacer.
-#[cfg(windows)]
 const PACKET_WAIT: Duration = Duration::from_millis(30);
+
+/// Fill `buf` completely, waiting up to `limit` for a source that delivers in
+/// pieces. Returns how many bytes arrived.
+///
+/// Pacing runs at exactly real time, so ordinary scheduling jitter can leave the
+/// queue a millisecond or two short of a packet. Waiting for those frames is
+/// inaudible; padding the packet with zeros is an 8 ms gap in the stream, which is
+/// not. The wait is bounded so a genuinely dead source cannot stall the pacer.
+pub fn fill_with_wait<F>(buf: &mut [u8], limit: Duration, mut pull: F) -> usize
+where
+    F: FnMut(&mut [u8], usize) -> usize,
+{
+    let start = std::time::Instant::now();
+    let mut got = 0;
+    loop {
+        got += pull(buf, got);
+        if got >= buf.len() || start.elapsed() >= limit {
+            return got.min(buf.len());
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
 
 /// Move bytes from the capture queue into `chunk`, starting at `offset`.
 /// Returns how many bytes were added.
@@ -569,14 +576,6 @@ fn drain_into_from(
         }
     }
     got - offset
-}
-
-#[cfg(windows)]
-fn drain_into(
-    queue: &Arc<std::sync::Mutex<std::collections::VecDeque<u8>>>,
-    chunk: &mut [u8],
-) -> usize {
-    drain_into_from(queue, chunk, 0)
 }
 
 fn play_inner(
@@ -867,4 +866,81 @@ fn play_inner(
     let _ = client.request("TEARDOWN", &uri, &[("Session", session_id)], &[]);
     log("session closed".to_string());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn a_source_that_delivers_the_whole_packet_needs_no_wait() {
+        let mut buf = [0u8; 16];
+        let got = fill_with_wait(&mut buf, Duration::from_millis(50), |b, offset| {
+            let n = b.len() - offset;
+            b[offset..].fill(7);
+            n
+        });
+        assert_eq!(got, 16);
+        assert!(buf.iter().all(|b| *b == 7));
+    }
+
+    #[test]
+    fn late_bytes_are_waited_for_rather_than_padded() {
+        // A bursty source: two bytes per pull. With the old zero-fill the packet
+        // went out short; now it must be complete.
+        let mut buf = [0u8; 16];
+        let got = fill_with_wait(&mut buf, Duration::from_millis(200), |b, offset| {
+            let n = (b.len() - offset).min(2);
+            b[offset..offset + n].fill(1);
+            n
+        });
+        assert_eq!(got, 16, "the packet must be complete");
+        assert!(buf.iter().all(|b| *b == 1), "no zero padding left behind");
+    }
+
+    #[test]
+    fn a_dead_source_returns_short_instead_of_stalling() {
+        let mut buf = [0u8; 16];
+        let start = std::time::Instant::now();
+        let got = fill_with_wait(&mut buf, Duration::from_millis(20), |_, _| 0);
+        let elapsed = start.elapsed();
+        assert_eq!(got, 0, "nothing arrived, and nothing was invented");
+        assert!(
+            elapsed >= Duration::from_millis(20),
+            "must actually wait the advertised limit, waited {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(300),
+            "must not stall the pacer, waited {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn a_partially_dead_source_returns_what_arrived() {
+        let mut buf = [0u8; 16];
+        let got = fill_with_wait(&mut buf, Duration::from_millis(20), |b, offset| {
+            if offset >= 4 {
+                return 0;
+            }
+            b[offset..offset + 4].fill(3);
+            4
+        });
+        assert_eq!(got, 4, "exactly what the source gave, no more");
+    }
+
+    #[test]
+    fn the_return_value_never_exceeds_the_buffer() {
+        // A buggy or malicious source reporting more than it wrote must not make
+        // the caller index past the end of the chunk.
+        let mut buf = [0u8; 8];
+        let got = fill_with_wait(&mut buf, Duration::from_millis(5), |_, _| 999);
+        assert_eq!(got, 8);
+    }
+
+    #[test]
+    fn the_wait_bound_is_below_a_packet_interval_budget() {
+        // Lateness must stay well under the pipeline slack the sender keeps.
+        assert!(PACKET_WAIT <= Duration::from_millis(30));
+    }
 }
