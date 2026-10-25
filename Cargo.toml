@@ -1,6 +1,6 @@
 [package]
 name = "raop-sender"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 rust-version = "1.85"
 description = "AirPlay 1 / RAOP sender for Windows: use any AirPlay speaker as a native Windows output device"

@@ -96,9 +96,38 @@ level and is not implemented.
 - [x] Windowless daemon, logon task, firewall rule
 - [x] Preconditions named by `--doctor` instead of guessed at
 - [x] Streaming path verified on loopback, with no receiver and no sound
-- [ ] Retransmission of lost packets (receiver requests on the control port are
-      currently ignored)
+- [x] Retransmission of lost packets, from a three-second ring
 - [ ] Measured end-to-end latency (acoustic cross-correlation)
+
+## Retransmission
+
+The receiver reports a lost packet on the control port — the same socket the sender
+writes sync packets to, so it has to do both:
+
+```
+0x80 0xD5 0x00 0x07  seq_hi seq_lo  count_hi count_lo
+```
+
+`seq` is the first missing sequence number and `count` how many follow, both
+big-endian. The answer is the original packet byte for byte — same sequence number,
+same timestamp, same SSRC — sent from the **RTP** socket rather than the control
+socket, because that is what the receiver slots back into its timeline.
+
+The sender keeps the last 384 packets: about three seconds at 125 packets/s, a few
+hundred kilobytes. A request for something older goes unserved, which is the same
+outcome as not implementing this at all, but without unbounded memory.
+
+Two things not to get wrong, both covered by tests in `src/resend.rs`:
+
+- Timing packets arrive on the same socket. Parsing one as a resend request would
+  have the sender blast stale audio at the receiver, so the type bytes and the fixed
+  `0x00 0x07` must both match before anything is resent.
+- Sequence numbers wrap at 65535. A ring keyed on "newest minus N" breaks there; the
+  lookup is by exact sequence number instead.
+
+Verified on loopback: the mock requested two packets 100 sequence numbers behind and
+both arrived, the sender logging `2 resent` and the mock reporting
+`requested 2, arrived 2`.
 
 ## How the streaming path is verified
 

@@ -40,6 +40,13 @@ stats = {
     "last_ts": None,
     "first_time": None,
     "last_time": None,
+    "seen": set(),
+    "duplicates": 0,
+    "control_addr": None,
+    "newest_seq": None,
+    "requested": set(),
+    "request_sent": 0,
+    "request_arrived": 0,
 }
 stop = threading.Event()
 
@@ -156,21 +163,52 @@ def on_server(data, addr):
         size = len(data) - 12
         stats["min_size"] = size if stats["min_size"] is None else min(stats["min_size"], size)
         stats["max_size"] = size if stats["max_size"] is None else max(stats["max_size"], size)
-        if stats["last_seq"] is not None and (stats["last_seq"] + 1) & 0xFFFF != seq:
-            stats["seq_gaps"] += 1
-        if stats["last_ts"] is not None and (stats["last_ts"] + 352) & 0xFFFFFFFF != ts:
-            stats["ts_bad"] += 1
+        # Track the RTP timeline, not arrival order: a retransmitted packet arrives
+        # late by design, and calling that a gap would fail every run that exercises
+        # retransmission.
+        timeline_seq = stats["last_seq"]
+        timeline_ts = stats["last_ts"]
+        if timeline_seq is None:
+            forward = 0
+        else:
+            forward = (seq - timeline_seq) & 0xFFFF
+        if timeline_seq is None or forward == 0:
+            pass  # first packet, or an exact duplicate
+        elif forward < 0x8000:
+            if forward != 1:
+                stats["seq_gaps"] += forward - 1
+            expected_ts = (timeline_ts + 352 * forward) & 0xFFFFFFFF
+            if ts != expected_ts:
+                stats["ts_bad"] += 1
+            stats["last_seq"] = seq
+            stats["last_ts"] = ts
+        else:
+            # Older than the timeline: a retransmission that arrived after we moved
+            # on. Not a gap, and it must not move the timeline backwards.
+            pass
         if stats["first_ts"] is None:
             stats["first_ts"] = ts
             stats["first_time"] = now
-        stats["last_seq"] = seq
-        stats["last_ts"] = ts
+            stats["last_seq"] = seq
+            stats["last_ts"] = ts
         stats["last_time"] = now
+        stats["newest_seq"] = seq
+        # A sequence number that arrives twice is a successful retransmission, but
+        # only if we asked for it; unsolicited duplicates would mean a sender bug.
+        if seq in stats["seen"]:
+            stats["duplicates"] += 1
+            if seq in stats["requested"]:
+                stats["request_arrived"] += 1
+        else:
+            stats["seen"].add(seq)
 
 
 def on_control(data, addr):
+    """Sync packets arrive from the sender's control socket; remember where, so the
+    retransmission test can send a request back to exactly that port."""
     with lock:
         stats["sync"] += 1
+        stats["control_addr"] = addr
 
 
 def on_timing(data, addr):
@@ -186,6 +224,31 @@ def on_timing(data, addr):
             UDP_TIMING.sendto(bytes(reply), addr)
         except OSError:
             pass
+
+
+def retransmit_probe(after_packets=200, gap=100, count=2):
+    """Ask the sender to resend a packet that is a little old, the way a receiver
+    that missed it would, then let the summary report whether it came back."""
+    while not stop.is_set():
+        time.sleep(0.5)
+        with lock:
+            newest = stats["newest_seq"]
+            addr = stats["control_addr"]
+            ready = (
+                newest is not None
+                and addr is not None
+                and stats["packets"] >= after_packets
+                and stats["request_sent"] == 0
+            )
+        if not ready:
+            continue
+        first = (newest - gap) & 0xFFFF
+        request = bytes([0x80, 0xD5, 0x00, 0x07, first >> 8, first & 0xFF, 0, count])
+        UDP_CONTROL.sendto(request, addr)
+        with lock:
+            stats["requested"] = {(first + i) & 0xFFFF for i in range(count)}
+            stats["request_sent"] = count
+        log(f"  requested retransmission of {count} packet(s) at seq {first}")
 
 
 def main():
@@ -223,6 +286,7 @@ def main():
         ("timing", UDP_TIMING, on_timing),
     ):
         threading.Thread(target=udp_loop, args=(name, sock, handler), daemon=True).start()
+    threading.Thread(target=retransmit_probe, daemon=True).start()
 
     deadline = time.time() + args.seconds
     last = 0
@@ -259,6 +323,10 @@ def main():
         f"integrity: {d['seq_gaps']} sequence gaps, {d['ts_bad']} timestamp steps "
         "not equal to 352"
     )
+    log(
+        f"retransmit: requested {d['request_sent']}, arrived {d['request_arrived']}, "
+        f"{d['duplicates']} duplicate packets seen"
+    )
 
     ok = True
     if d["packets"] == 0:
@@ -280,6 +348,11 @@ def main():
     if d["max_size"] is not None and d["max_size"] > 352 * 4:
         log("FAIL a payload is larger than the raw PCM it encodes: ALAC is not compressing")
         ok = False
+    if d["request_sent"] and d["request_arrived"] == 0:
+        log("FAIL a retransmission was requested and the sender never resent it")
+        ok = False
+    if d["packets"] and d["duplicates"] and not d["request_sent"]:
+        pass  # duplicates without a request are reported, not failed, above
     if ok and d["packets"]:
         log("PASS")
     return 0 if ok else 1

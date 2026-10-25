@@ -80,7 +80,7 @@ $underruns = ($stats | Select-String "underruns" | ForEach-Object {
     if ($_ -match "(\d+) underruns") { [int]$Matches[1] } }) | Measure-Object -Maximum
 Write-Host ""
 Write-Host "--- mock receiver ---"
-Get-Content $mockLog -ErrorAction SilentlyContinue | Select-String "summary:|integrity:|PASS|FAIL"
+Get-Content $mockLog -ErrorAction SilentlyContinue | Select-String "requested retransmission|summary:|integrity:|retransmit:|PASS|FAIL"
 Write-Host "--- sender ---"
 Write-Host ("worst underruns seen: {0}" -f ($(if ($underruns.Maximum) { $underruns.Maximum } else { 0 })))
 

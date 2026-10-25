@@ -4,6 +4,7 @@
 //! `play()` is only entered when a human asks for it.
 
 use crate::crypto;
+use crate::resend::{self, ResendRing};
 use crate::rtsp::{Response, RtspClient};
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -29,6 +30,8 @@ pub const AUDIO_GATE: u16 = 16;
 
 static RTP_NOW: AtomicU32 = AtomicU32::new(0);
 static TIMING_REQUESTS: AtomicU32 = AtomicU32::new(0);
+static RESEND_REQUESTS: AtomicU32 = AtomicU32::new(0);
+static RESEND_SENT: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
@@ -172,28 +175,66 @@ fn report(log: &Log, step: &str, resp: &Response) {
     }
 }
 
-fn spawn_sync_sender(remote_ip: String, control_port: u16, alive: Arc<AtomicBool>) {
+/// Own the control port for the whole session.
+///
+/// Two jobs, one socket: sync packets go out every 250 ms, and the receiver's
+/// resend requests come in. A resend is sent from the RTP socket, with the packet's
+/// original sequence number and timestamp, because that is what the receiver
+/// inserted into its timeline as missing.
+fn spawn_control(
+    remote_ip: String,
+    control_port: u16,
+    alive: Arc<AtomicBool>,
+    rtp: Arc<UdpSocket>,
+    ring: Arc<std::sync::Mutex<ResendRing>>,
+) {
     std::thread::spawn(move || {
         let dest = format!("{remote_ip}:{control_port}");
         let sock = match UdpSocket::bind("0.0.0.0:0") {
             Ok(s) => s,
             Err(_) => return,
         };
+        let _ = sock.set_read_timeout(Some(Duration::from_millis(20)));
+
         let mut first = true;
+        let mut next_sync = std::time::Instant::now();
+        let mut buf = [0u8; 256];
+
         while alive.load(Ordering::Relaxed) {
-            let (sec, frac) = ntp_now();
-            let rtp = RTP_NOW.load(Ordering::Relaxed);
-            let mut pkt = Vec::with_capacity(20);
-            pkt.push(if first { 0x90 } else { 0x80 });
-            pkt.push(0xD4);
-            pkt.extend_from_slice(&7u16.to_be_bytes());
-            pkt.extend_from_slice(&rtp.to_be_bytes());
-            pkt.extend_from_slice(&sec.to_be_bytes());
-            pkt.extend_from_slice(&frac.to_be_bytes());
-            pkt.extend_from_slice(&rtp.to_be_bytes());
-            let _ = sock.send_to(&pkt, &dest);
-            first = false;
-            std::thread::sleep(Duration::from_millis(250));
+            if std::time::Instant::now() >= next_sync {
+                let (sec, frac) = ntp_now();
+                let now = RTP_NOW.load(Ordering::Relaxed);
+                let mut pkt = Vec::with_capacity(20);
+                pkt.push(if first { 0x90 } else { 0x80 });
+                pkt.push(0xD4);
+                pkt.extend_from_slice(&7u16.to_be_bytes());
+                pkt.extend_from_slice(&now.to_be_bytes());
+                pkt.extend_from_slice(&sec.to_be_bytes());
+                pkt.extend_from_slice(&frac.to_be_bytes());
+                pkt.extend_from_slice(&now.to_be_bytes());
+                let _ = sock.send_to(&pkt, &dest);
+                first = false;
+                next_sync += Duration::from_millis(250);
+            }
+
+            if let Ok((n, _)) = sock.recv_from(&mut buf) {
+                let Some((first_seq, count)) = resend::parse_request(&buf[..n]) else {
+                    continue; // a timing probe or garbage, not a resend request
+                };
+                RESEND_REQUESTS.fetch_add(1, Ordering::Relaxed);
+                let ring = match ring.lock() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+                for offset in 0..count {
+                    let seq = first_seq.wrapping_add(offset);
+                    if let Some(packet) = ring.get(seq) {
+                        if rtp.send(&packet).is_ok() {
+                            RESEND_SENT.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
+            }
         }
     });
 }
@@ -345,10 +386,13 @@ fn stream_system(
     iv: &[u8; 16],
     client: &mut RtspClient,
     uri: &str,
+    ring: &Arc<std::sync::Mutex<ResendRing>>,
 ) -> Result<(), String> {
     #[cfg(not(windows))]
     {
-        let _ = (cfg, log, stop, alive, sock, ssrc, key, iv, client, uri);
+        let _ = (
+            cfg, log, stop, alive, sock, ssrc, key, iv, client, uri, ring,
+        );
         Err("system audio capture is Windows-only".to_string())
     }
 
@@ -497,9 +541,14 @@ fn stream_system(
                 last_sound = std::time::Instant::now();
             }
 
-            let packet = audio_packet_bytes(&mut alac, seq, timestamp, ssrc, &chunk, key, iv);
+            let packet = Arc::new(audio_packet_bytes(
+                &mut alac, seq, timestamp, ssrc, &chunk, key, iv,
+            ));
             sock.send(&packet).map_err(|e| format!("send: {e}"))?;
             RTP_NOW.store(timestamp, Ordering::Relaxed);
+            if let Ok(mut ring) = ring.lock() {
+                ring.push(seq, packet);
+            }
 
             seq = seq.wrapping_add(1);
             timestamp = timestamp.wrapping_add(FRAMES_PER_PACKET);
@@ -513,8 +562,12 @@ fn stream_system(
                 // silence or music?" from the log alone, which is otherwise
                 // impossible to tell from the receiver's replies.
                 log(format!(
-                    "  {} packets, {} underruns, pipeline delay {} ms, peak {}",
-                    seq as u32, starved, queued_ms, interval_peak
+                    "  {} packets, {} underruns, pipeline delay {} ms, peak {}, {} resent",
+                    seq as u32,
+                    starved,
+                    queued_ms,
+                    interval_peak,
+                    RESEND_SENT.load(Ordering::Relaxed)
                 ));
                 interval_peak = 0;
             }
@@ -522,8 +575,11 @@ fn stream_system(
         }
 
         log(format!(
-            "capture session ended: {} packets, {} underruns",
-            seq as u32, starved
+            "capture session ended: {} packets, {} underruns, {} resend requests ({} resent)",
+            seq as u32,
+            starved,
+            RESEND_REQUESTS.load(Ordering::Relaxed),
+            RESEND_SENT.load(Ordering::Relaxed)
         ));
         Ok(())
     }
@@ -673,7 +729,9 @@ fn play_inner(
 
     RTP_NOW.store(60_000, Ordering::Relaxed);
     TIMING_REQUESTS.store(0, Ordering::Relaxed);
-    spawn_sync_sender(remote_ip.clone(), control_remote, alive.clone());
+    RESEND_REQUESTS.store(0, Ordering::Relaxed);
+    RESEND_SENT.store(0, Ordering::Relaxed);
+    // spawn_control is started below, once the RTP socket exists.
 
     if !cfg.set_volume {
         log("leaving receiver volume untouched (shared with TV)".to_string());
@@ -773,9 +831,19 @@ fn play_inner(
     }
 
     let destination = format!("{remote_ip}:{server_port}");
-    let sock = UdpSocket::bind("0.0.0.0:0").map_err(|e| format!("udp bind: {e}"))?;
+    let sock = Arc::new(UdpSocket::bind("0.0.0.0:0").map_err(|e| format!("udp bind: {e}"))?);
     sock.connect(&destination)
         .map_err(|e| format!("udp connect: {e}"))?;
+    // Three seconds of audio: long enough to cover a retransmission round trip on a
+    // congested link, small enough to stay irrelevant next to the audio buffers.
+    let ring = Arc::new(std::sync::Mutex::new(ResendRing::new(384)));
+    spawn_control(
+        remote_ip.clone(),
+        control_remote,
+        alive.clone(),
+        sock.clone(),
+        ring.clone(),
+    );
 
     if cfg.source == Source::System {
         stream_system(
@@ -789,6 +857,7 @@ fn play_inner(
             &aes_iv,
             &mut client,
             &uri,
+            &ring,
         )?;
         // The deferred RECORD reply is diagnostic only; never wait long for it.
         let _ = client.set_read_timeout(Duration::from_millis(200));
@@ -833,6 +902,9 @@ fn play_inner(
         );
         sock.send(&packet).map_err(|e| format!("send: {e}"))?;
         RTP_NOW.store(timestamp, Ordering::Relaxed);
+        if let Ok(mut ring) = ring.lock() {
+            ring.push(seq, Arc::new(packet));
+        }
 
         seq = seq.wrapping_add(1);
         timestamp = timestamp.wrapping_add(n);
@@ -849,9 +921,11 @@ fn play_inner(
     }
 
     log(format!(
-        "sent {} packets, {} timing requests from receiver",
+        "sent {} packets, {} timing requests, {} resend requests ({} resent)",
         seq as u32,
-        TIMING_REQUESTS.load(Ordering::Relaxed)
+        TIMING_REQUESTS.load(Ordering::Relaxed),
+        RESEND_REQUESTS.load(Ordering::Relaxed),
+        RESEND_SENT.load(Ordering::Relaxed)
     ));
 
     let _ = client.set_read_timeout(Duration::from_millis(200));

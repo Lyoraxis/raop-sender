@@ -3,6 +3,16 @@
 All notable changes to this project. Dates are ISO-8601. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.2] — 2026-10-25
+
+- **Retransmission.** A receiver that reports a lost packet on the control port now
+  gets it back, from a ring holding the last three seconds of stream. Requests older
+  than that go unserved, which is the old behaviour without unbounded memory.
+  Verified on loopback: two packets requested 100 sequence numbers behind, both
+  resent, integrity still 0 gaps and 0 timestamp anomalies.
+- The stats line reports how many packets were resent, so a run says whether the
+  link is losing anything.
+
 ## [0.2.1] — 2026-10-25
 
 Landed immediately after `v0.2.0` was tagged, so `v0.2.0`'s binaries contain most of
@@ -72,6 +82,7 @@ the RAOP framing, sync and timing packets, WASAPI capture of a virtual cable, a
 windowless daemon and an installer that registers a logon task and the inbound UDP
 rule the receiver needs in order to send timing requests back.
 
+[0.2.2]: https://github.com/Lyoraxis/raop-sender/releases/tag/v0.2.2
 [0.2.1]: https://github.com/Lyoraxis/raop-sender/releases/tag/v0.2.1
 [0.2.0]: https://github.com/Lyoraxis/raop-sender/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Lyoraxis/raop-sender/releases/tag/v0.1.0

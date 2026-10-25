@@ -95,7 +95,8 @@ Windows app ──► "CABLE Input" (virtual endpoint, VB-CABLE)
 
 Protocol sequence: `OPTIONS` → `ANNOUNCE` → `SETUP` → `SET_PARAMETER` (optional)
 → `RECORD` (not awaited) → RTP audio → `TEARDOWN`, with sync packets to the
-receiver's control port and a timing server on the sender side.
+receiver's control port, a timing server on the sender side, and a reader on that
+same control port that answers the receiver's resend requests.
 
 ## Compatibility
 
@@ -327,8 +328,9 @@ calling the sender broken.
 
 - **Windows only.** Capture is WASAPI; the crate is `cfg(windows)`.
 - **AirPlay 1 only.** No AirPlay 2 pairing, so AirPlay-2-only devices will not work.
-- **No retransmission.** The receiver may request missing packets on its control
-  port; those requests are ignored, so a lossy link causes dropouts.
+- **Retransmission covers three seconds.** Lost packets are kept in a ring and
+  resent when the receiver asks; anything older than roughly three seconds is gone.
+  A link losing more than that produces dropouts the sender cannot repair.
 - **A receiver in standby is unreachable.** It accepts the stream and outputs
   nothing (see the troubleshooting table).
 - **Latency is measured on the sender side only.** The receiver's own buffering
@@ -348,6 +350,7 @@ calling the sender broken.
 | `src/alac.rs` | ALAC encoding wrapper (352 frames/packet) |
 | `src/capture.rs` | WASAPI capture from the chosen endpoint (Windows-only) |
 | `src/pcm.rs` | endpoint bytes → 44.1 kHz/16-bit/stereo; platform-neutral and tested |
+| `src/resend.rs` | receiver-requested retransmission: request parsing and the packet ring |
 | `src/rtsp.rs` | dependency-free RTSP client |
 | `DESIGN.md` | wire-level notes and the failure modes found while building it |
 | `CHANGELOG.md` | what changed, and why each change mattered |
