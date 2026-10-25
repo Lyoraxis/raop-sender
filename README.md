@@ -139,7 +139,7 @@ All configuration is environment variables — nothing site-specific is compiled
 | `RAOP_DEVICE` | `CABLE` | case-insensitive substring of the capture device's friendly name |
 | `RAOP_PRIME_MS` | `60` | audio buffered before the first packet is sent |
 | `RAOP_BUFFER_MS` | `60` | backlog retained when the stream starts; pure added latency |
-| `RAOP_IDLE_MS` | `120000` | silence tolerated before the session is recycled |
+| `RAOP_IDLE_MS` | `600000` | silence tolerated before the session is recycled; short pauses cost nothing |
 
 `RAOP_HOST` has no default on purpose — nothing site-specific is compiled in.
 The CLI takes `--host` as an alternative, and the GUI has an editable field.

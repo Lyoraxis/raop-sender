@@ -302,12 +302,16 @@ fn audio_packet_bytes(
     packet
 }
 
-/// How long the stream may carry nothing before the session is torn down so the
-/// daemon can reconnect. A receiver that fell asleep mid-session recovers on
-/// reconnect; rotating on a fixed timer instead used to cut audio mid-track.
+/// How long the stream may carry nothing before the session is torn down.
+///
+/// Silence does not idle the session: a silent packet every 8 ms keeps the RTP
+/// timeline alive, so a short pause costs nothing on resume. This timer only
+/// exists to re-arm a receiver that fell asleep mid-session, and it is
+/// deliberately long for that reason — rotating too eagerly turned every pause
+/// in playback into a reconnect the listener could hear.
 #[cfg(windows)]
 fn idle_rotate_ms() -> usize {
-    env_ms("RAOP_IDLE_MS", 120_000)
+    env_ms("RAOP_IDLE_MS", 600_000)
 }
 
 /// Milliseconds from an environment variable, if set and sane.
@@ -700,7 +704,8 @@ fn play_inner(
 
     if cfg.source == Source::System {
         stream_system(cfg, log, stop, alive, &sock, ssrc, &aes_key, &aes_iv)?;
-        std::thread::sleep(Duration::from_millis(300));
+        // The deferred RECORD reply is diagnostic only; never wait long for it.
+        let _ = client.set_read_timeout(Duration::from_millis(200));
         if let Ok(r) = client.read_pending() {
             log(format!(
                 "RECORD reply: {} {}",
@@ -763,7 +768,7 @@ fn play_inner(
         TIMING_REQUESTS.load(Ordering::Relaxed)
     ));
 
-    std::thread::sleep(Duration::from_millis(400));
+    let _ = client.set_read_timeout(Duration::from_millis(200));
 
     if let Ok(r) = client.read_pending() {
         log(format!(

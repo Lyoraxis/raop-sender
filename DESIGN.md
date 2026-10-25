@@ -196,11 +196,14 @@ seconds late. The gate discards everything but the last `RAOP_BUFFER_MS`.
 
 ## Session lifecycle
 
-The stream starts only when captured audio becomes non-silent, and the session is
-recycled after `RAOP_IDLE_MS` (default 2 minutes) of silence, which is what
-recovers a receiver that fell asleep between tracks. A fixed timer is wrong here:
-rotating on the clock cuts audio mid-track, which is exactly the defect the idle
-timer replaced.
+The stream starts only when captured audio becomes non-silent. After that, silence
+does **not** idle the session: a silent packet every 8 ms keeps the RTP timeline
+alive, so pausing playback and resuming costs nothing.
+
+`RAOP_IDLE_MS` (default 10 minutes) exists only to re-arm a receiver that fell
+asleep mid-session. It was 2 minutes and that was wrong — it tore down sessions
+that were perfectly healthy, so every long pause was followed by a reconnect the
+listener could hear.
 
 One case remains undetectable from the sender: audio keeps arriving but the
 receiver has gone to standby, so it looks identical to a healthy stream. The

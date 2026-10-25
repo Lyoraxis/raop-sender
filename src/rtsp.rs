@@ -120,6 +120,15 @@ impl RtspClient {
     }
 
     /// Read a response that was deferred by the receiver.
+    /// Shorten (or lengthen) how long a read may block.
+    ///
+    /// Used before opportunistic reads: waiting the full connect timeout for a
+    /// reply the receiver may never send turns teardown into a 15-second stall.
+    pub fn set_read_timeout(&mut self, timeout: Duration) -> std::io::Result<()> {
+        self.writer.set_read_timeout(Some(timeout))?;
+        self.reader.get_ref().set_read_timeout(Some(timeout))
+    }
+
     pub fn read_pending(&mut self) -> std::io::Result<Response> {
         self.read_response()
     }

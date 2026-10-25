@@ -130,6 +130,6 @@ fn main() {
         }
         stop.store(true, Ordering::Relaxed);
 
-        std::thread::sleep(Duration::from_secs(3));
+        std::thread::sleep(Duration::from_secs(1));
     }
 }
