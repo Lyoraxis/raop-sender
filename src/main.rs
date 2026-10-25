@@ -1,21 +1,56 @@
 //! Command-line debug front end for the RAOP sender.
 //!
-//! Audio is never played implicitly: `--play` is required.
+//! Audio is never played implicitly: `--play` is required. `--doctor` and
+//! `--probe-volume` diagnose without producing sound.
 
+use raop_sender::config;
+use raop_sender::doctor;
 use raop_sender::session::{self, Settings};
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+const USAGE: &str = "\
+  raop-sender --play [--seconds N] [--volume-db X] [--host IP:PORT]
+  raop-sender --doctor [--host IP:PORT]   check every precondition, plays nothing
+  raop-sender --probe-volume              handshake + volume only, silent";
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
 
+    let doctor_mode = args.iter().any(|a| a == "--doctor");
     let probe = args.iter().any(|a| a == "--probe-volume");
-    if !args.iter().any(|a| a == "--play") && !probe {
+    let play = args.iter().any(|a| a == "--play");
+
+    if doctor_mode {
+        // The same fallback file the daemon reads, so the report describes the
+        // configuration that will actually run.
+        let applied = config::load_env_file();
+        let host = args
+            .iter()
+            .position(|a| a == "--host")
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+            .or_else(config::host);
+        if applied > 0 {
+            println!("loaded {applied} setting(s) from raop-sender.env\n");
+        }
+        println!("raop-sender doctor\n");
+        let report = doctor::run(host.as_deref(), 1.0);
+        print!("{}", report.render());
+        println!();
+        if report.failed() {
+            println!("result: at least one check failed, fix the FAIL lines above");
+            return ExitCode::FAILURE;
+        }
+        println!("result: every precondition a stream depends on is satisfied");
+        return ExitCode::SUCCESS;
+    }
+
+    if !play && !probe {
         eprintln!("refusing to play: pass --play (audio is always explicit)");
         eprintln!();
-        eprintln!("  raop-sender --play [--seconds N] [--volume-db X] [--host IP:PORT]");
-        eprintln!("  raop-sender --probe-volume     (handshake + volume only, silent)");
+        eprintln!("{USAGE}");
         return ExitCode::FAILURE;
     }
 
@@ -37,9 +72,7 @@ fn main() -> ExitCode {
         cfg.volume_db = v;
         cfg.amplitude = 0.25;
     }
-    cfg.host = get("--host")
-        .or_else(|| std::env::var("RAOP_HOST").ok())
-        .unwrap_or_default();
+    cfg.host = get("--host").or_else(config::host).unwrap_or_default();
     if cfg.host.is_empty() {
         eprintln!("error: no receiver configured");
         eprintln!("  pass --host IP:PORT, or set RAOP_HOST");

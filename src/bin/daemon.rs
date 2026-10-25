@@ -17,6 +17,7 @@
 
 #![windows_subsystem = "windows"]
 
+use raop_sender::config;
 use raop_sender::session::{self, Settings, Source};
 use std::io::Write;
 use std::path::PathBuf;
@@ -30,15 +31,8 @@ use std::time::Duration;
 /// asleep, which cannot be distinguished from the sending side yet.
 const SESSION_MINUTES: u64 = 60;
 
-fn exe_dir() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-
 fn log_path() -> PathBuf {
-    exe_dir().join("daemon.log")
+    config::exe_dir().join("daemon.log")
 }
 
 fn trace(line: &str) {
@@ -55,47 +49,22 @@ fn trace(line: &str) {
     }
 }
 
-/// Read `raop-sender.env` next to the executable and export it, without
-/// overriding anything already present in the real environment.
-fn load_env_file() {
-    let path = exe_dir().join("raop-sender.env");
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return;
-    };
-    let mut applied = 0;
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if let Some((key, value)) = line.split_once('=') {
-            let key = key.trim();
-            let value = value.trim();
-            if key.is_empty() || std::env::var_os(key).is_some() {
-                continue;
-            }
-            std::env::set_var(key, value);
-            applied += 1;
-        }
-    }
+fn main() {
+    trace("daemon starting");
+    let applied = config::load_env_file();
     if applied > 0 {
         trace(&format!("loaded {applied} setting(s) from raop-sender.env"));
     }
-}
-
-fn main() {
-    trace("daemon starting");
-    load_env_file();
 
     // No receiver address is compiled in: it is deployment-specific.
-    let host = std::env::var("RAOP_HOST").unwrap_or_default();
+    let host = config::host().unwrap_or_default();
     if host.is_empty() {
         trace("RAOP_HOST is not set; write it to raop-sender.env next to this exe");
         loop {
             std::thread::sleep(Duration::from_secs(60));
         }
     }
-    let device = std::env::var("RAOP_DEVICE").unwrap_or_else(|_| "CABLE".to_string());
+    let device = config::device_filter();
     trace(&format!(
         "receiver {host}, capture device filter {device:?}"
     ));

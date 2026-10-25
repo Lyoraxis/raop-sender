@@ -31,6 +31,10 @@ a virtual cable (VB-CABLE) and streams it to an AirPlay 1 receiver as ALAC.
 Goal: keep a windowless background sender that behaves like a normal Windows
 output device. Audio goes: app -> CABLE Input -> CABLE Output -> ALAC -> RAOP.
 
+Before changing anything, run `raop-sender --doctor`: it reports the receiver, the
+capture format, the level the cable is carrying, the firewall rule and the
+scheduled task in one shot, and it plays nothing.
+
 Non-negotiable protocol constraints (each one cost hours to find; do not "clean
 them up"):
 
@@ -180,6 +184,8 @@ check the firewall rule first.
 
 ## Troubleshooting
 
+Start with `raop-sender --doctor`; it names the failing precondition directly.
+
 | Symptom | Cause |
 |---|---|
 | Silence, all `200 OK` | only one of the four conditions is met: inbound UDP firewall rule, `RECORD` not awaited, sync packets every ~250 ms, AES key wrapped in SDP |
@@ -205,12 +211,34 @@ here.
 ### Command line
 
 ```bash
+raop-sender --doctor --host 192.0.2.10:5000          # diagnose, plays nothing
 raop-sender --play --host 192.0.2.10:5000 --seconds 3 --volume-db -24
 raop-sender --probe-volume --host 192.0.2.10:5000   # silent: handshake and volume only
 ```
 
 `--host` is required unless `RAOP_HOST` is set. `--play` is required to emit
-audio; `--probe-volume` never sends RTP.
+audio; `--doctor` and `--probe-volume` never send RTP.
+
+### `--doctor`
+
+Every failure this project has seen in the field was silent: `200 OK` on every
+request and no sound. `--doctor` walks the preconditions in one run, reads the
+cable locally and opens no session:
+
+```
+  [ok  ] config         RAOP_HOST=192.0.2.10:5000, RAOP_DEVICE=CABLE, raop-sender.env present
+  [ok  ] receiver tcp   192.0.2.10:5000 accepts connections
+  [ok  ] receiver /info 200 OK (AppleTV3,2)
+  [ok  ] capture device CABLE Output (VB-Audio Virtual Cable) at 44100 Hz, 32-bit, 2 ch, float=true, 44541 frames heard
+  [FAIL] audio level    peak 0 (-inf dBFS): nothing is being routed here
+                         ->  set the Windows output device to CABLE Input, then play something
+  [ok  ] firewall       rule 'AirPlay Sender' is present
+  [ok  ] scheduled task 'AirPlay Sender' is registered
+```
+
+Exit code is non-zero when any check fails. The audio-level check is the one that
+distinguishes "the sender is broken" from "nothing is being sent to it": it reports
+the peak it can hear and compares it with the gate the session waits for.
 
 ## Tests
 
@@ -218,14 +246,20 @@ audio; `--probe-volume` never sends RTP.
 cargo test
 ```
 
-Five unit tests cover the parts that are easy to get subtly wrong and hard to
-notice by ear: the AES framing (length preserved, only the aligned prefix
-encrypted, tail left as plaintext, round-trips) and ALAC packet encoding
-(non-empty, smaller than raw PCM, deterministic for a fresh encoder, stable over
-sequential packets).
+26 unit tests cover the parts that are easy to get subtly wrong and hard to notice
+by ear:
 
-The capture and streaming paths are Windows-only and have no automated test —
-they need a real endpoint and a real receiver.
+- **AES framing** — length preserved, only the aligned prefix encrypted, tail left
+  as plaintext, round-trips.
+- **ALAC packet encoding** — non-empty, smaller than raw PCM, deterministic for a
+  fresh encoder, stable over sequential packets.
+- **Format conversion** (`src/pcm.rs`) — float32/float64/int16/int24/int32 decoding,
+  mono duplication, ignored extra channels, clipping, 48 kHz resampling over one
+  second and across 100 chunks, chunk-boundary independence, and nonsense geometry.
+  This module is platform-neutral so it can be tested off Windows.
+
+The streaming path itself is Windows-only and has no automated test — it needs a
+real endpoint and a real receiver. `--doctor` covers its preconditions.
 
 ## Limitations
 
