@@ -217,11 +217,15 @@ here.
 ```bash
 raop-sender --doctor --host 192.0.2.10:5000          # diagnose, plays nothing
 raop-sender --play --host 192.0.2.10:5000 --seconds 3 --volume-db -24
+raop-sender --play --system --host 192.0.2.10:5000  # stream the cable, like the daemon
 raop-sender --probe-volume --host 192.0.2.10:5000   # silent: handshake and volume only
 ```
 
-`--host` is required unless `RAOP_HOST` is set. `--play` is required to emit
-audio; `--doctor` and `--probe-volume` never send RTP.
+`--host` is required unless `RAOP_HOST` is set, and wins over it when both are
+given. `--play` is required to emit audio; `--doctor` and `--probe-volume` never
+send RTP. `--system` switches the source from the generated tone to the capture
+device, which is what the daemon does; it runs until interrupted and never writes
+the receiver's volume.
 
 ### `--doctor`
 
@@ -253,7 +257,7 @@ line.
 cargo test
 ```
 
-26 unit tests cover the parts that are easy to get subtly wrong and hard to notice
+32 unit tests cover the parts that are easy to get subtly wrong and hard to notice
 by ear:
 
 - **AES framing** — length preserved, only the aligned prefix encrypted, tail left
@@ -264,6 +268,11 @@ by ear:
   mono duplication, ignored extra channels, clipping, 48 kHz resampling over one
   second and across 100 chunks, chunk-boundary independence, and nonsense geometry.
   This module is platform-neutral so it can be tested off Windows.
+- **Late-frame policy** (`session::fill_with_wait`) — a bursty source must end up
+  with a complete packet, a dead source must return short instead of stalling the
+  pacer, and the byte count can never exceed the buffer.
+- **Configuration and `--doctor`** — a missing address, an address without a port,
+  and a failing check that must never be rendered as a pass.
 
 The streaming path itself is Windows-only and the unit tests cannot reach it, so
 there is a loopback harness instead. It needs no AirPlay hardware and makes no

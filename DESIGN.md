@@ -94,9 +94,36 @@ level and is not implemented.
 - [x] ALAC RTP streaming
 - [x] WASAPI capture of a virtual cable, with real mix-format conversion
 - [x] Windowless daemon, logon task, firewall rule
+- [x] Preconditions named by `--doctor` instead of guessed at
+- [x] Streaming path verified on loopback, with no receiver and no sound
 - [ ] Retransmission of lost packets (receiver requests on the control port are
       currently ignored)
 - [ ] Measured end-to-end latency (acoustic cross-correlation)
+
+## How the streaming path is verified
+
+The unit tests cannot reach it: it is Windows-only and needs an endpoint and a
+receiver. Two pieces make it reachable without either.
+
+`tools/mock-receiver.py` answers `OPTIONS`, `ANNOUNCE`, `SETUP`, `RECORD`,
+`SET_PARAMETER`, `GET /info` and `TEARDOWN`, then parses every RTP header it
+receives. `examples/tonefeed.rs` renders a sine into `CABLE Input` with WASAPI, so
+the capture side has something real to convert and the resampler is exercised
+(the cable renders at 48 kHz while RAOP carries 44.1 kHz).
+
+Measured over 79.94 s on this machine: 10016 packets, 125.3 packets/s, 0
+underruns, 0 sequence gaps, 0 timestamp steps that were not 352 frames, payload
+272–474 B against 1408 B of raw PCM, 321 sync packets. The mock fails the run if
+any of the invariants break, which makes it usable as a regression gate rather
+than a demo.
+
+Two traps the harness itself had to learn, both now handled by
+`tools/loopback-test.ps1`:
+
+- It must not run while the daemon is up. The daemon captures the same endpoint
+  and would forward the test tone to the real receiver.
+- VB-CABLE replays its last buffer to a fresh capture client, so the tone stays
+  audible to the next reader unless silence is rendered into the cable afterwards.
 
 ## Sequence the device answers cleanly
 
@@ -242,8 +269,13 @@ worth remembering:
 ## Diagnostic modes
 
 ```
+raop-sender --doctor --host IP:PORT                         # checks, plays nothing
 raop-sender --probe-volume --host IP:PORT [--volume-db X]   # handshake only, silent
 raop-sender --play --host IP:PORT [--seconds N] [--volume-db X]
+raop-sender --play --system --host IP:PORT                  # capture the cable, runs until stopped
 ```
 
-`--probe-volume` never sends RECORD or RTP, so it produces no sound.
+`--probe-volume` never sends RECORD or RTP, so it produces no sound. `--doctor`
+never opens a session at all: it reads the cable locally and asks the receiver for
+`/info`. `--system` is the daemon's source path, exposed so the capture side can be
+driven from a terminal; it deliberately leaves the receiver's volume alone.

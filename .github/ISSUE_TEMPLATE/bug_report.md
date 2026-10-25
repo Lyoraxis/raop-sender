@@ -8,6 +8,15 @@ labels: bug
 
 <!-- Silence? Static? Dropouts? Be specific about what you hear. -->
 
+## `--doctor` output
+
+Run this first and paste the whole block. It names the failing precondition, and it
+plays nothing:
+
+```
+raop-sender --doctor --host <receiver>:5000
+```
+
 ## Receiver
 
 | | |
@@ -37,7 +46,8 @@ paste here
 ```
 
 The useful lines are `capturing …`, `buffer primed with … ms`,
-`audio detected (peak …)`, `pipeline delay … ms`, and anything with
+`audio detected (peak …)`, `pipeline delay … ms`, `peak …` (the level actually
+being sent, which distinguishes silence from music), and anything with
 `volume before:` — `-144.000000` means the receiver is muted or asleep.
 
 ## Environment
