@@ -3,6 +3,20 @@
 All notable changes to this project. Dates are ISO-8601. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Landed immediately after `v0.2.0` was tagged, so it is not in that release's
+changelog even though its binaries contain it:
+
+- **Loopback harness.** `tools/mock-receiver.py` plus `examples/tonefeed.rs` and
+  `tools/loopback-test.ps1` exercise the streaming path with no receiver and no
+  sound, and assert what is invisible by ear: sequence continuity, the 352-frame
+  timestamp step, ~125 packets/s pacing, and payloads smaller than the raw PCM.
+  Measured over 79.9 s: 10016 packets, 125.3/s, 0 underruns, 0 sequence gaps, 0
+  timestamp anomalies.
+- **`--system`** on the CLI, so the capture path can be driven without the daemon.
+- Unit tests for `fill_with_wait`, the policy that waits for late frames.
+
 ## [0.2.0] — 2026-10-25
 
 First version that can be handed to someone else without a walkthrough. Everything
