@@ -1,0 +1,38 @@
+[package]
+name = "raop-sender"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "AirPlay 1 / RAOP sender for Windows: use any AirPlay speaker as a native Windows output device"
+license = "MIT"
+repository = "https://github.com/Lyoraxis/raop-sender"
+readme = "README.md"
+keywords = ["airplay", "raop", "audio", "windows", "alac"]
+categories = ["multimedia::audio", "os::windows-apis"]
+
+[lib]
+name = "raop_sender"
+path = "src/lib.rs"
+
+[[bin]]
+name = "raop-sender"
+path = "src/main.rs"
+
+[[bin]]
+name = "raop-gui"
+path = "src/bin/gui.rs"
+
+[[bin]]
+name = "raop-daemon"
+path = "src/bin/daemon.rs"
+
+[dependencies]
+aes = "0.8"
+alac-encoder = "0.3"
+rand = "0.8"
+rsa = "0.9"
+sha1 = "0.10"
+eframe = "=0.27.2"
+
+[target.'cfg(windows)'.dependencies]
+wasapi = "0.26"
