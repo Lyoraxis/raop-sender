@@ -50,8 +50,12 @@ them up"):
    the television up or down. `Settings::set_volume = false` in the daemon.
 7. Stream nothing until captured audio is non-silent. An RTP stream of digital
    zeros makes receivers click.
-8. Read the endpoint's real mix format and convert it. Assuming 16-bit PCM when
-   the device emits 32-bit float yields loud static.
+8. Read the endpoint's real mix format and convert it in `src/pcm.rs`. Assuming
+   16-bit PCM when the device emits 32-bit float yields loud static. That module is
+   platform-neutral and unit-tested for exactly this reason — keep it that way.
+9. Send `RECORD` only once captured audio is non-silent. A receiver drops a
+   recording session that receives no packets, so an early `RECORD` means the first
+   sound plays into a session that no longer exists.
 
 Latency lives in `RAOP_PRIME_MS` and `RAOP_BUFFER_MS` (default 60 ms each) plus
 `src/capture.rs`. Do not reintroduce large buffers.
@@ -245,7 +249,8 @@ they need a real endpoint and a real receiver.
 | `src/session.rs` | RAOP handshake, RTP pacing, sync packets, timing server |
 | `src/crypto.rs` | RSA-OAEP key wrap, AES-128-CBC payload encryption |
 | `src/alac.rs` | ALAC encoding wrapper (352 frames/packet) |
-| `src/capture.rs` | WASAPI capture and format conversion to 44.1 kHz/16-bit/stereo |
+| `src/capture.rs` | WASAPI capture from the chosen endpoint (Windows-only) |
+| `src/pcm.rs` | endpoint bytes → 44.1 kHz/16-bit/stereo; platform-neutral and tested |
 | `src/rtsp.rs` | dependency-free RTSP client |
 | `DESIGN.md` | wire-level notes and the failure modes found while building it |
 

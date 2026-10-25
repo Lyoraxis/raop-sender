@@ -359,8 +359,8 @@ fn stream_system(
         )?;
 
         // Prefill half a second so the first packets are not silence.
-        let prime_bytes = crate::capture::BYTES_PER_SECOND * env_ms("RAOP_PRIME_MS", 60) / 1000;
-        let want = prime_bytes.max(crate::capture::BYTES_PER_SECOND / 100);
+        let prime_bytes = crate::pcm::BYTES_PER_SECOND * env_ms("RAOP_PRIME_MS", 60) / 1000;
+        let want = prime_bytes.max(crate::pcm::BYTES_PER_SECOND / 100);
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         loop {
             let have = queue.lock().map(|q| q.len()).unwrap_or(0);
@@ -372,7 +372,7 @@ fn stream_system(
                 } else {
                     log(format!(
                         "buffer primed with {} ms",
-                        have * 1000 / crate::capture::BYTES_PER_SECOND
+                        have * 1000 / crate::pcm::BYTES_PER_SECOND
                     ));
                 }
                 break;
@@ -420,8 +420,8 @@ fn stream_system(
                 // Drop everything older than the last quarter second: the queue
                 // grows while we wait for audio, and playing it from the front
                 // is what made playback seconds late.
-                let keep = (crate::capture::BYTES_PER_SECOND * env_ms("RAOP_BUFFER_MS", 60) / 1000)
-                    .max(crate::capture::BYTES_PER_SECOND / 100);
+                let keep = (crate::pcm::BYTES_PER_SECOND * env_ms("RAOP_BUFFER_MS", 60) / 1000)
+                    .max(crate::pcm::BYTES_PER_SECOND / 100);
                 let mut dropped = 0usize;
                 if let Ok(mut q) = queue.lock() {
                     while q.len() > keep {
@@ -434,7 +434,7 @@ fn stream_system(
                 }
                 log(format!(
                     "audio detected (peak {peak}), starting stream (dropped {} ms of backlog)",
-                    dropped * 1000 / crate::capture::BYTES_PER_SECOND
+                    dropped * 1000 / crate::pcm::BYTES_PER_SECOND
                 ));
             } else {
                 std::thread::sleep(Duration::from_millis(20));
@@ -505,7 +505,7 @@ fn stream_system(
                 // Exact sender-side pipeline delay: audio sitting in our queue
                 // has not been transmitted yet, so it is pure added latency.
                 let queued = queue.lock().map(|q| q.len()).unwrap_or(0);
-                let queued_ms = queued * 1000 / crate::capture::BYTES_PER_SECOND;
+                let queued_ms = queued * 1000 / crate::pcm::BYTES_PER_SECOND;
                 log(format!(
                     "  {} packets, {} underruns, pipeline delay {} ms",
                     seq as u32, starved, queued_ms

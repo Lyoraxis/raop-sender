@@ -1,21 +1,17 @@
-//! WASAPI capture of the virtual cable, converted to the fixed format RAOP needs.
+//! WASAPI capture of the virtual cable.
 //!
-//! We no longer assume anything about the endpoint: the mix format is read,
-//! logged, and converted here (sample type, bit depth, channel count and sample
-//! rate). Sending raw endpoint bytes as if they were 44.1k/16/stereo is what
-//! produced loud static.
+//! This module only moves bytes: it reads the endpoint's real mix format, logs it,
+//! and hands the raw bytes to `crate::pcm::Converter`. The conversion itself lives
+//! there because it is platform-neutral and testable; a wrong sample type is what
+//! produced loud static, and that code deserves tests.
 
 #![cfg(windows)]
 
+use crate::pcm::{Converter, BYTES_PER_SECOND};
 use crate::session::Log;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-
-/// 16-bit stereo, the format RAOP carries.
-pub const BYTES_PER_FRAME: usize = 4;
-pub const SAMPLE_RATE: u32 = 44_100;
-pub const BYTES_PER_SECOND: usize = SAMPLE_RATE as usize * BYTES_PER_FRAME;
 
 pub fn start(
     log: Log,
@@ -71,103 +67,6 @@ fn pick_device(
                 seen.join(", ")
             ))
         }
-    }
-}
-
-/// Converts whatever the endpoint produces into 44100 Hz / 16-bit / stereo LE.
-struct Converter {
-    rate: u32,
-    channels: u16,
-    bits: u16,
-    is_float: bool,
-    phase: f64,
-    prev: (f32, f32),
-}
-
-impl Converter {
-    fn new(rate: u32, channels: u16, bits: u16, is_float: bool) -> Self {
-        Self {
-            rate,
-            channels,
-            bits,
-            is_float,
-            phase: 0.0,
-            prev: (0.0, 0.0),
-        }
-    }
-
-    /// Decode one interleaved frame to (left, right) in -1.0 .. 1.0.
-    fn decode_frame(&self, frame: &[u8]) -> (f32, f32) {
-        let width = (self.bits / 8) as usize;
-        if width == 0 {
-            return (0.0, 0.0);
-        }
-        let mut ch: Vec<f32> = Vec::with_capacity(self.channels as usize);
-        for c in 0..self.channels as usize {
-            let start = c * width;
-            if start + width > frame.len() {
-                break;
-            }
-            let s = &frame[start..start + width];
-            let v = if self.is_float && width == 4 {
-                f32::from_le_bytes([s[0], s[1], s[2], s[3]])
-            } else if self.is_float && width == 8 {
-                f64::from_le_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]) as f32
-            } else {
-                match width {
-                    2 => i16::from_le_bytes([s[0], s[1]]) as f32 / 32768.0,
-                    3 => {
-                        let raw = i32::from_le_bytes([0, s[0], s[1], s[2]]) >> 8;
-                        raw as f32 / 8_388_608.0
-                    }
-                    4 => i32::from_le_bytes([s[0], s[1], s[2], s[3]]) as f32 / 2_147_483_648.0,
-                    _ => 0.0,
-                }
-            };
-            ch.push(v);
-        }
-        match ch.len() {
-            0 => (0.0, 0.0),
-            1 => (ch[0], ch[0]),
-            _ => (ch[0], ch[1]),
-        }
-    }
-
-    /// Convert a block of endpoint bytes, appending 44.1k/16/stereo LE to `out`.
-    fn push(&mut self, bytes: &[u8], out: &mut Vec<u8>) {
-        if bytes.is_empty() {
-            return;
-        }
-        let width = (self.bits / 8) as usize * self.channels as usize;
-        if width == 0 {
-            return;
-        }
-
-        let mut frames: Vec<(f32, f32)> = Vec::with_capacity(bytes.len() / width);
-        for frame in bytes.chunks_exact(width) {
-            frames.push(self.decode_frame(frame));
-        }
-        if frames.is_empty() {
-            return;
-        }
-
-        let step = self.rate as f64 / SAMPLE_RATE as f64;
-        let mut pos = self.phase;
-
-        while pos < frames.len() as f64 {
-            let idx = pos.floor() as usize;
-            let frac = pos - idx as f64;
-            let a = if idx == 0 { self.prev } else { frames[idx - 1] };
-            let b = frames[idx.min(frames.len() - 1)];
-            let l = a.0 as f64 + (b.0 as f64 - a.0 as f64) * frac;
-            let r = a.1 as f64 + (b.1 as f64 - a.1 as f64) * frac;
-            out.extend_from_slice(&((l.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
-            out.extend_from_slice(&((r.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
-            pos += step;
-        }
-
-        self.phase = pos - frames.len() as f64;
-        self.prev = frames[frames.len() - 1];
     }
 }
 
