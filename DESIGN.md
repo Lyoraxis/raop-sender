@@ -37,7 +37,10 @@ Windows, with no third-party sender.
 
 3. `SETUP` with `Transport: RTP/AVP/UDP;unicast;mode=record` → device replies with
    `server_port` (6000), `control_port` (6001), `timing_port` (6002).
-4. `RECORD` — sent **write-only**, never awaited (see traps).
+4. `RECORD` — sent **write-only**, never awaited (see traps). For system capture it
+   is sent only once captured audio is actually non-silent, so the receiver never
+   holds a recording session that has nothing to play; an idle one is dropped and
+   the first sound lands in a dead session.
 5. Stream over UDP: 352 frames per packet. Per packet:
    - encode the PCM frame as ALAC,
    - AES-128-CBC encrypt only the first `len & ~0xF` bytes; the trailing bytes
@@ -196,9 +199,14 @@ seconds late. The gate discards everything but the last `RAOP_BUFFER_MS`.
 
 ## Session lifecycle
 
-The stream starts only when captured audio becomes non-silent. After that, silence
-does **not** idle the session: a silent packet every 8 ms keeps the RTP timeline
-alive, so pausing playback and resuming costs nothing.
+The handshake happens once at startup, but `RECORD` and the RTP stream start only
+when captured audio becomes non-silent. A session that is set up and then receives
+no packets is dropped by the receiver, and the first sound is played into a session
+that no longer exists — the "pressed play, nothing happened" symptom. Sending
+`RECORD` behind the silence gate keeps that window at zero.
+
+After the stream starts, silence does **not** idle the session: a silent packet every
+8 ms keeps the RTP timeline alive, so pausing playback and resuming costs nothing.
 
 `RAOP_IDLE_MS` (default 10 minutes) exists only to re-arm a receiver that fell
 asleep mid-session. It was 2 minutes and that was wrong — it tore down sessions

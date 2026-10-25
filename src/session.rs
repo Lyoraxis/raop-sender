@@ -335,10 +335,12 @@ fn stream_system(
     ssrc: u32,
     key: &[u8; 16],
     iv: &[u8; 16],
+    client: &mut RtspClient,
+    uri: &str,
 ) -> Result<(), String> {
     #[cfg(not(windows))]
     {
-        let _ = (cfg, log, stop, alive, sock, ssrc, key, iv);
+        let _ = (cfg, log, stop, alive, sock, ssrc, key, iv, client, uri);
         Err("system audio capture is Windows-only".to_string())
     }
 
@@ -438,6 +440,18 @@ fn stream_system(
                 std::thread::sleep(Duration::from_millis(20));
             }
         }
+
+        if !started {
+            return Ok(());
+        }
+
+        // RECORD only once there is audio to send. Announcing a recording
+        // session that then stays packetless makes the receiver give up on it,
+        // and the first sound is played into a dead session — heard as "pressed
+        // play, nothing happened" until the session is rebuilt.
+        client
+            .send_only("RECORD", uri, &[], &[])
+            .map_err(|e| format!("record: {e}"))?;
 
         let idle_limit = Duration::from_millis(idle_rotate_ms() as u64);
         let mut last_sound = std::time::Instant::now();
@@ -692,10 +706,15 @@ fn play_inner(
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    // The receiver answers RECORD only after audio flows, so never await it.
-    client
-        .send_only("RECORD", &uri, &[], &[])
-        .map_err(|e| format!("record: {e}"))?;
+    // Generated audio has something to send immediately. For system capture the
+    // RECORD is issued from inside the stream loop instead, once audio exists —
+    // see the comment there.
+    if cfg.source != Source::System {
+        // The receiver answers RECORD only after audio flows, so never await it.
+        client
+            .send_only("RECORD", &uri, &[], &[])
+            .map_err(|e| format!("record: {e}"))?;
+    }
 
     let destination = format!("{remote_ip}:{server_port}");
     let sock = UdpSocket::bind("0.0.0.0:0").map_err(|e| format!("udp bind: {e}"))?;
@@ -703,7 +722,18 @@ fn play_inner(
         .map_err(|e| format!("udp connect: {e}"))?;
 
     if cfg.source == Source::System {
-        stream_system(cfg, log, stop, alive, &sock, ssrc, &aes_key, &aes_iv)?;
+        stream_system(
+            cfg,
+            log,
+            stop,
+            alive,
+            &sock,
+            ssrc,
+            &aes_key,
+            &aes_iv,
+            &mut client,
+            &uri,
+        )?;
         // The deferred RECORD reply is diagnostic only; never wait long for it.
         let _ = client.set_read_timeout(Duration::from_millis(200));
         if let Ok(r) = client.read_pending() {
